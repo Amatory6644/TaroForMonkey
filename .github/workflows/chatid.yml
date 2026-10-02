@@ -39,19 +39,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python src/chatid_bot.py
 
-      - name: Dispatch meme workflow at minute 00 or 30
+      - name: Dispatch meme workflow every scheduled run
         if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          minute=$(date -u +%M)
-          if [ "$minute" -lt 5 ] || { [ "$minute" -ge 30 ] && [ "$minute" -lt 35 ]; }; then
-            echo "Dispatching meme workflow for half-hour slot (UTC minute $minute)"
-            gh workflow run meme.yml --ref main
-          else
-            echo "Not a meme half-hour slot (UTC minute $minute)"
-          fi
+          echo "Dispatching meme workflow for 5-minute scheduler test"
+          gh workflow run meme.yml --ref main
 
       - name: Save Telegram update offset
         shell: bash
