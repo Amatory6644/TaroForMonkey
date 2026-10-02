@@ -1,8 +1,11 @@
-"""Hourly Telegram meme bot: pick the most popular fresh Reddit meme.\n\nThe workflow runs at :30 each hour and keeps a sent-post history.\n"""
+"""Hourly Telegram meme bot.
+
+Fetches large fresh samples from Meme_Api (Reddit-backed), picks the item with
+the highest upvote count, filters unsafe/repeated posts, and sends it to Telegram.
+"""
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import sys
@@ -15,9 +18,10 @@ SUBREDDITS = ("memes", "dankmemes", "funny")
 HISTORY_PATH = Path(__file__).resolve().parent.parent / "data" / "meme_history.json"
 MAX_HISTORY = 200
 MAX_MEDIA_BYTES = 9_000_000
+SAMPLE_SIZE = 50
 
 USER_AGENT = (
-    "TaroForMonkeyMemeBot/1.0 "
+    "TaroForMonkeyMemeBot/1.1 "
     "(GitHub Actions; hourly Telegram meme digest)"
 )
 
@@ -41,81 +45,75 @@ def save_history(sent: list[str]) -> None:
     )
 
 
-def image_url(post: dict) -> str | None:
-    raw_url = post.get("url_overridden_by_dest") or post.get("url") or ""
-    raw_url = html.unescape(raw_url)
-    ext = Path(urlparse(raw_url).path).suffix.lower()
-    if ext in {".jpg", ".jpeg", ".png", ".gif"}:
-        return raw_url
-
-    try:
-        preview_url = post["preview"]["images"][0]["source"]["url"]
-    except (KeyError, IndexError, TypeError):
-        return None
-
-    preview_url = html.unescape(preview_url)
-    ext = Path(urlparse(preview_url).path).suffix.lower()
-    if ext in {".jpg", ".jpeg", ".png", ".gif"}:
-        return preview_url
-    return None
+def post_id_from_link(link: str) -> str:
+    return Path(urlparse(link).path).name.strip()
 
 
 def fetch_subreddit(subreddit: str) -> list[dict]:
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
-    params = {"t": "day", "limit": 50, "raw_json": 1}
-    endpoints = (
-        f"https://www.reddit.com/r/{subreddit}/top.json",
-        f"https://old.reddit.com/r/{subreddit}/top.json",
-    )
+    url = f"https://meme-api.com/gimme/{subreddit}/{SAMPLE_SIZE}"
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        print(f"Не удалось получить мемы r/{subreddit}: {exc}", file=sys.stderr)
+        return []
 
-    last_error: Exception | None = None
-    for endpoint in endpoints:
-        try:
-            response = requests.get(endpoint, headers=headers, params=params, timeout=25)
-            response.raise_for_status()
-            payload = response.json()
-            return [
-                child.get("data", {})
-                for child in payload.get("data", {}).get("children", [])
-                if child.get("kind") == "t3"
-            ]
-        except (requests.RequestException, ValueError) as exc:
-            last_error = exc
+    memes = payload.get("memes", [])
+    return memes if isinstance(memes, list) else []
 
-    print(f"Не удалось получить r/{subreddit}: {last_error}", file=sys.stderr)
-    return []
+
+def media_url(item: dict) -> str | None:
+    url = str(item.get("url") or "")
+    ext = Path(urlparse(url).path).suffix.lower()
+    if ext in {".jpg", ".jpeg", ".png", ".gif"}:
+        return url
+
+    previews = item.get("preview") or []
+    for preview in reversed(previews):
+        preview_url = str(preview or "")
+        ext = Path(urlparse(preview_url).path).suffix.lower()
+        if ext in {".jpg", ".jpeg", ".png", ".gif"}:
+            return preview_url
+
+    return None
 
 
 def candidates(sent: set[str]) -> list[dict]:
     result: list[dict] = []
 
     for subreddit in SUBREDDITS:
-        for post in fetch_subreddit(subreddit):
-            post_id = str(post.get("id") or "")
-            if not post_id or post_id in sent:
-                continue
-            if post.get("over_18") or post.get("spoiler") or post.get("stickied"):
-                continue
-            if post.get("is_video"):
+        for item in fetch_subreddit(subreddit):
+            if item.get("nsfw") or item.get("spoiler"):
                 continue
 
-            media_url = image_url(post)
-            if not media_url:
+            post_link = str(item.get("postLink") or "")
+            post_id = post_id_from_link(post_link)
+            if not post_id or post_id in sent:
+                continue
+
+            url = media_url(item)
+            if not url:
                 continue
 
             result.append(
                 {
                     "id": post_id,
-                    "title": str(post.get("title") or "Мем часа"),
-                    "subreddit": str(post.get("subreddit") or subreddit),
-                    "score": int(post.get("score") or 0),
-                    "comments": int(post.get("num_comments") or 0),
-                    "permalink": "https://www.reddit.com" + str(post.get("permalink") or ""),
-                    "media_url": media_url,
+                    "title": str(item.get("title") or "Мем часа"),
+                    "subreddit": str(item.get("subreddit") or subreddit),
+                    "score": int(item.get("ups") or 0),
+                    "permalink": post_link,
+                    "media_url": url,
                 }
             )
 
-    result.sort(key=lambda item: (item["score"], item["comments"]), reverse=True)
+    # Approximation of "most popular now": highest upvote count in three
+    # 50-item fresh samples returned by the Reddit-backed aggregator.
+    result.sort(key=lambda item: item["score"], reverse=True)
     return result
 
 
@@ -139,34 +137,40 @@ def download_media(url: str) -> tuple[bytes, str, str]:
             continue
         size += len(chunk)
         if size > MAX_MEDIA_BYTES:
-            raise ValueError("Файл мема слишком большой для безопасной отправки")
+            raise ValueError("Файл мема слишком большой для отправки")
         chunks.append(chunk)
 
     if not chunks:
-        raise ValueError("Reddit вернул пустой файл")
+        raise ValueError("Источник вернул пустой файл")
 
     return b"".join(chunks), content_type, filename
 
 
-def send_to_telegram(token: str, chat_id: str, item: dict, media: bytes, content_type: str, filename: str) -> None:
+def send_to_telegram(
+    token: str,
+    chat_id: str,
+    item: dict,
+    media: bytes,
+    content_type: str,
+    filename: str,
+) -> None:
     title = item["title"].strip()
-    if len(title) > 600:
-        title = title[:597] + "..."
+    if len(title) > 650:
+        title = title[:647] + "..."
 
     caption = (
         f"😂 Мем часа\n\n"
         f"{title}\n\n"
-        f"👍 {item['score']:,}  •  💬 {item['comments']:,}  •  r/{item['subreddit']}\n"
+        f"👍 {item['score']:,}  •  r/{item['subreddit']}\n"
         f"🔗 {item['permalink']}"
     ).replace(",", " ")
 
     is_gif = filename.endswith(".gif") or content_type == "image/gif"
     method = "sendAnimation" if is_gif else "sendPhoto"
     field = "animation" if is_gif else "photo"
-    api_url = f"https://api.telegram.org/bot{token}/{method}"
 
     response = requests.post(
-        api_url,
+        f"https://api.telegram.org/bot{token}/{method}",
         data={"chat_id": chat_id, "caption": caption},
         files={field: (filename, media, content_type)},
         timeout=45,
@@ -204,7 +208,7 @@ def main() -> int:
             save_history(history)
             print(
                 f"Отправлен мем r/{item['subreddit']} "
-                f"(score={item['score']}, id={item['id']})."
+                f"(ups={item['score']}, id={item['id']})."
             )
             return 0
         except (requests.RequestException, RuntimeError, ValueError) as exc:
