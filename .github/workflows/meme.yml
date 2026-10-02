@@ -1,16 +1,9 @@
 name: Popular meme to Telegram every 30 minutes
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0,30 * * * *"
-  push:
-    branches:
-      - main
-    paths:
-      - "src/meme_bot.py"
-      - ".github/workflows/meme.yml"
-      - "data/meme_trigger.txt"
+    - cron: '0,30 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Install Tesseract OCR
         run: |
