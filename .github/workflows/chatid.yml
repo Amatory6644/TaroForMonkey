@@ -1,4 +1,4 @@
-name: Telegram chat ID command
+name: Telegram scheduler
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: telegram-chatid-command
@@ -37,6 +38,20 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python src/chatid_bot.py
+
+      - name: Dispatch meme workflow at minute 00 or 30
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          minute=$(date -u +%M)
+          if [ "$minute" -lt 5 ] || { [ "$minute" -ge 30 ] && [ "$minute" -lt 35 ]; }; then
+            echo "Dispatching meme workflow for half-hour slot (UTC minute $minute)"
+            gh workflow run meme.yml --ref main
+          else
+            echo "Not a meme half-hour slot (UTC minute $minute)"
+          fi
 
       - name: Save Telegram update offset
         shell: bash
