@@ -190,8 +190,16 @@ def ocr_candidate(image: Image.Image, psm: int) -> tuple[str, float]:
     text_lines = []
     for words in lines.values():
         line = clean_ocr_line(" ".join(words))
-        if len(line) >= 2:
-            text_lines.append(line)
+        alpha_tokens = re.findall(r"[A-Za-z]+", line)
+        alpha_chars = sum(len(token) for token in alpha_tokens)
+
+        # Drop OCR debris such as "ay", "B", "im", "YE".
+        if alpha_chars < 4:
+            continue
+        if len(alpha_tokens) == 1 and len(alpha_tokens[0]) < 4:
+            continue
+
+        text_lines.append(line)
 
     text = "\n".join(text_lines).strip()
     if not text:
@@ -247,13 +255,39 @@ def extract_text_from_image(media: bytes) -> str:
 
 
 def translate_to_russian(text: str) -> str:
-    text = text.strip()
+    text = " ".join(text.split()).strip()
     if not text:
         return ""
     if not re.search(r"[A-Za-z]{2,}", text):
         return text
 
-    # One request per meme keeps the free translator much less rate-limited.
+    # A single request for the whole meme gives a much more natural translation
+    # than translating OCR fragments separately.
+    try:
+        response = requests.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={
+                "client": "gtx",
+                "sl": "en",
+                "tl": "ru",
+                "dt": "t",
+                "q": text[:1200],
+            },
+            headers={"User-Agent": USER_AGENT},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        translated = "".join(
+            str(chunk[0])
+            for chunk in payload[0]
+            if isinstance(chunk, list) and chunk and chunk[0]
+        ).strip()
+        if translated:
+            return translated
+    except (requests.RequestException, ValueError, TypeError, IndexError) as exc:
+        print(f"Google Translate недоступен: {exc}", file=sys.stderr)
+
     try:
         response = requests.get(
             "https://api.mymemory.translated.net/get",
@@ -271,12 +305,7 @@ def translate_to_russian(text: str) -> str:
     except (requests.RequestException, ValueError) as exc:
         print(f"MyMemory перевод недоступен: {exc}", file=sys.stderr)
 
-    try:
-        translated = GoogleTranslator(source="auto", target="ru").translate(text[:1000])
-        return (translated or "").strip()
-    except Exception as exc:
-        print(f"Google перевод недоступен: {exc}", file=sys.stderr)
-        return ""
+    return ""
 
 
 def build_caption(item: dict, media: bytes) -> str:
@@ -289,12 +318,12 @@ def build_caption(item: dict, media: bytes) -> str:
     if not translated:
         translated = "Не удалось автоматически перевести текст этого мема."
 
-    caption = f"🇷🇺 Перевод:\n{translated}\n\n🔗 {item['permalink']}"
+    caption = f"{translated}\n\n🔗 {item['permalink']}"
     if len(caption) > 1024:
         link = f"\n\n🔗 {item['permalink']}"
-        allowed = max(100, 1024 - len(link) - len("🇷🇺 Перевод:\n") - 3)
+        allowed = max(100, 1024 - len(link) - 3)
         translated = translated[:allowed].rstrip() + "..."
-        caption = f"🇷🇺 Перевод:\n{translated}{link}"
+        caption = f"{translated}{link}"
     return caption
 
 
