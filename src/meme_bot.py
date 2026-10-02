@@ -156,13 +156,13 @@ def download_media(url: str) -> tuple[bytes, str, str]:
 def clean_ocr_text(text: str) -> str:
     lines = []
     for raw_line in text.splitlines():
-        line = re.sub(r"\\s+", " ", raw_line).strip()
+        line = re.sub(r"\s+", " ", raw_line).strip()
         if len(line) < 2:
             continue
         if not re.search(r"[A-Za-zА-Яа-я]", line):
             continue
         lines.append(line)
-    return "\\n".join(lines)[:2400]
+    return "\n".join(lines)[:2400]
 
 
 def extract_text_from_image(media: bytes) -> str:
@@ -198,9 +198,9 @@ def build_caption(item: dict, media: bytes) -> str:
 
     parts = ["😂 Мем часа"]
     if image_ru:
-        parts.append(f"🇷🇺 Перевод мема:\\n{image_ru}")
+        parts.append(f"🇷🇺 Перевод мема:\n{image_ru}")
     elif title_ru:
-        parts.append(f"🇷🇺 Перевод:\\n{title_ru}")
+        parts.append(f"🇷🇺 Перевод:\n{title_ru}")
     else:
         parts.append(item["title"])
 
@@ -210,7 +210,7 @@ def build_caption(item: dict, media: bytes) -> str:
     parts.append(f"👍 {item['score']:,}  •  r/{item['subreddit']}".replace(",", " "))
     parts.append(f"🔗 {item['permalink']}")
 
-    caption = "\\n\\n".join(parts)
+    caption = "\n\n".join(parts)
     if len(caption) > 1024:
         caption = caption[:1021].rstrip() + "..."
     return caption
@@ -223,18 +223,8 @@ def send_to_telegram(
     media: bytes,
     content_type: str,
     filename: str,
+    caption: str,
 ) -> None:
-    title = item["title"].strip()
-    if len(title) > 650:
-        title = title[:647] + "..."
-
-    caption = (
-        f"😂 Мем часа\n\n"
-        f"{title}\n\n"
-        f"👍 {item['score']:,}  •  r/{item['subreddit']}\n"
-        f"🔗 {item['permalink']}"
-    ).replace(",", " ")
-
     is_gif = filename.endswith(".gif") or content_type == "image/gif"
     method = "sendAnimation" if is_gif else "sendPhoto"
     field = "animation" if is_gif else "photo"
