@@ -6,6 +6,7 @@ the highest upvote count, filters unsafe/repeated posts, and sends it to Telegra
 
 from __future__ import annotations
 
+import html
 import io
 import json
 import os
@@ -183,11 +184,31 @@ def translate_to_russian(text: str) -> str:
         return ""
     if not re.search(r"[A-Za-z]{2,}", text):
         return text
+
+    # MyMemory works more reliably from shared GitHub Actions IPs.
     try:
-        translated = GoogleTranslator(source="auto", target="ru").translate(text[:4500])
+        response = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": text[:480], "langpair": "en|ru"},
+            headers={"User-Agent": USER_AGENT},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        translated = html.unescape(
+            str(payload.get("responseData", {}).get("translatedText") or "")
+        ).strip()
+        if translated and "MYMEMORY WARNING" not in translated.upper():
+            return translated
+    except (requests.RequestException, ValueError) as exc:
+        print(f"MyMemory перевод недоступен: {exc}", file=sys.stderr)
+
+    # Fallback if the primary translator is temporarily unavailable.
+    try:
+        translated = GoogleTranslator(source="auto", target="ru").translate(text[:1000])
         return (translated or "").strip()
     except Exception as exc:
-        print(f"Не удалось перевести текст: {exc}", file=sys.stderr)
+        print(f"Google перевод недоступен: {exc}", file=sys.stderr)
         return ""
 
 
