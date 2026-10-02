@@ -1,4 +1,4 @@
-"""Hourly Telegram meme bot: pick the most popular fresh Reddit meme."""
+"""Hourly Telegram meme bot: pick the most popular fresh Reddit meme.\n\nThe workflow runs at :30 each hour and keeps a sent-post history.\n"""
 
 from __future__ import annotations
 
