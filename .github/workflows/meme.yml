@@ -1,9 +1,9 @@
-name: Hourly popular meme to Telegram
+name: Popular meme to Telegram every 30 minutes
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "5,45 * * * *"
+    - cron: "0,30 * * * *"
   push:
     branches:
       - main
@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: hourly-popular-meme
+  group: popular-meme-telegram
   cancel-in-progress: false
 
 jobs:
