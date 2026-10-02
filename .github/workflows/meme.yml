@@ -2,14 +2,13 @@ name: Hourly popular meme to Telegram
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "30 * * * *"
   push:
     branches:
       - main
     paths:
       - "src/meme_bot.py"
       - ".github/workflows/meme.yml"
+      - "data/meme_trigger.txt"
 
 permissions:
   contents: write
