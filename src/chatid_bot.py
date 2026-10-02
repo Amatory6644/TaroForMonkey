@@ -1,4 +1,4 @@
-"""Respond to /chatid commands using Telegram Bot API getUpdates."""
+"""Respond to /chatid commands using Telegram Bot API getUpdates.\n\nTriggered manually after first group test.\n"""
 
 from __future__ import annotations
 
