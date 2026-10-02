@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "data/manual_message.txt"
+      - ".github/workflows/manual-tarot.yml"
   workflow_dispatch:
 
 jobs:
@@ -35,15 +36,19 @@ jobs:
 
           token = os.environ["TELEGRAM_BOT_TOKEN"]
           chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          chat_ids = [chat_id, "-5577576013"]
           text = Path("data/manual_message.txt").read_text(encoding="utf-8")
 
-          response = requests.post(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              json={"chat_id": chat_id, "text": text},
-              timeout=30,
-          )
-          response.raise_for_status()
-          result = response.json()
-          if not result.get("ok"):
-              raise RuntimeError("Telegram Bot API rejected the message.")
+          for target_chat_id in chat_ids:
+              response = requests.post(
+                  f"https://api.telegram.org/bot{token}/sendMessage",
+                  json={"chat_id": target_chat_id, "text": text},
+                  timeout=30,
+              )
+              response.raise_for_status()
+              result = response.json()
+              if not result.get("ok"):
+                  raise RuntimeError(
+                      f"Telegram Bot API rejected message for {target_chat_id}."
+                  )
           PY
