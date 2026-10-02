@@ -19,6 +19,7 @@ HISTORY_PATH = Path(__file__).resolve().parent.parent / "data" / "meme_history.j
 MAX_HISTORY = 200
 MAX_MEDIA_BYTES = 9_000_000
 SAMPLE_SIZE = 50
+EXTRA_CHAT_IDS = ("-5577576013",)
 
 USER_AGENT = (
     "TaroForMonkeyMemeBot/1.1 "
@@ -193,6 +194,8 @@ def main() -> int:
         print("Не заданы TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID.", file=sys.stderr)
         return 1
 
+    chat_ids = [chat_id, *EXTRA_CHAT_IDS]
+
     history = load_history()
     available = candidates(set(history))
     if not available:
@@ -203,7 +206,15 @@ def main() -> int:
     for item in available:
         try:
             media, content_type, filename = download_media(item["media_url"])
-            send_to_telegram(token, chat_id, item, media, content_type, filename)
+            for target_chat_id in chat_ids:
+                send_to_telegram(
+                    token,
+                    target_chat_id,
+                    item,
+                    media,
+                    content_type,
+                    filename,
+                )
             history.append(item["id"])
             save_history(history)
             print(
