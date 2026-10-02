@@ -1,8 +1,4 @@
-"""Hourly Telegram meme bot.
-
-Fetches large fresh samples from Meme_Api (Reddit-backed), picks the item with
-the highest upvote count, filters unsafe/repeated posts, and sends it to Telegram.
-"""
+"""Hourly Telegram meme bot with Russian translation."""
 
 from __future__ import annotations
 
@@ -12,6 +8,7 @@ import json
 import os
 import re
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -28,7 +25,7 @@ SAMPLE_SIZE = 50
 EXTRA_CHAT_IDS = ("-5577576013",)
 
 USER_AGENT = (
-    "TaroForMonkeyMemeBot/1.1 "
+    "TaroForMonkeyMemeBot/1.3 "
     "(GitHub Actions; hourly Telegram meme digest)"
 )
 
@@ -86,7 +83,6 @@ def media_url(item: dict) -> str | None:
         ext = Path(urlparse(preview_url).path).suffix.lower()
         if ext in {".jpg", ".jpeg", ".png", ".gif"}:
             return preview_url
-
     return None
 
 
@@ -110,7 +106,7 @@ def candidates(sent: set[str]) -> list[dict]:
             result.append(
                 {
                     "id": post_id,
-                    "title": str(item.get("title") or "Мем часа"),
+                    "title": str(item.get("title") or "Мем"),
                     "subreddit": str(item.get("subreddit") or subreddit),
                     "score": int(item.get("ups") or 0),
                     "permalink": post_link,
@@ -118,8 +114,6 @@ def candidates(sent: set[str]) -> list[dict]:
                 }
             )
 
-    # Approximation of "most popular now": highest upvote count in three
-    # 50-item fresh samples returned by the Reddit-backed aggregator.
     result.sort(key=lambda item: item["score"], reverse=True)
     return result
 
@@ -153,26 +147,100 @@ def download_media(url: str) -> tuple[bytes, str, str]:
     return b"".join(chunks), content_type, filename
 
 
+def clean_ocr_line(line: str) -> str:
+    line = re.sub(r"\s+", " ", line).strip()
+    line = re.sub(r"[^A-Za-z0-9%$€£'\".,!?():;+\-/&@# ]+", " ", line)
+    line = re.sub(r"\s+", " ", line).strip(" |")
+    return line
 
-def clean_ocr_text(text: str) -> str:
-    lines = []
-    for raw_line in text.splitlines():
-        line = re.sub(r"\s+", " ", raw_line).strip()
-        if len(line) < 2:
+
+def ocr_candidate(image: Image.Image, psm: int) -> tuple[str, float]:
+    data = pytesseract.image_to_data(
+        image,
+        lang="eng",
+        config=f"--psm {psm}",
+        output_type=pytesseract.Output.DICT,
+    )
+
+    lines: OrderedDict[tuple[int, int, int], list[str]] = OrderedDict()
+    confidences: list[float] = []
+
+    count = len(data.get("text", []))
+    for i in range(count):
+        word = clean_ocr_line(str(data["text"][i] or ""))
+        if not word or not re.search(r"[A-Za-z0-9]", word):
             continue
-        if not re.search(r"[A-Za-zА-Яа-я]", line):
+
+        try:
+            confidence = float(data["conf"][i])
+        except (TypeError, ValueError):
+            confidence = -1.0
+
+        if confidence < 28:
             continue
-        lines.append(line)
-    return "\n".join(lines)[:2400]
+
+        key = (
+            int(data["block_num"][i]),
+            int(data["par_num"][i]),
+            int(data["line_num"][i]),
+        )
+        lines.setdefault(key, []).append(word)
+        confidences.append(confidence)
+
+    text_lines = []
+    for words in lines.values():
+        line = clean_ocr_line(" ".join(words))
+        if len(line) >= 2:
+            text_lines.append(line)
+
+    text = "\n".join(text_lines).strip()
+    if not text:
+        return "", 0.0
+
+    words = re.findall(r"[A-Za-z0-9%]+", text)
+    alpha_chars = len(re.findall(r"[A-Za-z]", text))
+    weird_chars = len(re.findall(r"[^A-Za-z0-9\s%$€£'\".,!?():;+\-/&@#]", text))
+    avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+
+    score = avg_conf
+    score += min(len(words), 30) * 1.3
+    score += min(alpha_chars / 10, 12)
+    score -= weird_chars * 5
+    return text[:1800], score
 
 
 def extract_text_from_image(media: bytes) -> str:
     try:
         with Image.open(io.BytesIO(media)) as image:
             image.seek(0)
-            frame = ImageOps.autocontrast(ImageOps.grayscale(image.convert("RGB")))
-            text = pytesseract.image_to_string(frame, lang="eng", config="--psm 6")
-            return clean_ocr_text(text)
+            base = image.convert("RGB")
+
+            # Upscaling helps meme captions with outlined fonts and compressed JPEGs.
+            scale = 2 if max(base.size) < 2200 else 1
+            if scale > 1:
+                base = base.resize(
+                    (base.width * scale, base.height * scale),
+                    Image.Resampling.LANCZOS,
+                )
+
+            gray = ImageOps.autocontrast(ImageOps.grayscale(base))
+            threshold = gray.point(lambda p: 255 if p >= 155 else 0)
+
+            variants = (base, gray, threshold)
+            attempts: list[tuple[str, float]] = []
+
+            for variant in variants:
+                for psm in (6, 11):
+                    text, score = ocr_candidate(variant, psm)
+                    if text:
+                        attempts.append((text, score))
+
+            if not attempts:
+                return ""
+
+            best_text, best_score = max(attempts, key=lambda item: item[1])
+            print(f"OCR score={best_score:.1f}: {best_text[:700]}")
+            return best_text
     except Exception as exc:
         print(f"OCR не смог прочитать мем: {exc}", file=sys.stderr)
         return ""
@@ -185,7 +253,7 @@ def translate_to_russian(text: str) -> str:
     if not re.search(r"[A-Za-z]{2,}", text):
         return text
 
-    # MyMemory works more reliably from shared GitHub Actions IPs.
+    # One request per meme keeps the free translator much less rate-limited.
     try:
         response = requests.get(
             "https://api.mymemory.translated.net/get",
@@ -203,7 +271,6 @@ def translate_to_russian(text: str) -> str:
     except (requests.RequestException, ValueError) as exc:
         print(f"MyMemory перевод недоступен: {exc}", file=sys.stderr)
 
-    # Fallback if the primary translator is temporarily unavailable.
     try:
         translated = GoogleTranslator(source="auto", target="ru").translate(text[:1000])
         return (translated or "").strip()
@@ -214,33 +281,26 @@ def translate_to_russian(text: str) -> str:
 
 def build_caption(item: dict, media: bytes) -> str:
     image_text = extract_text_from_image(media)
-    image_ru = translate_to_russian(image_text)
-    title_ru = translate_to_russian(item["title"])
 
-    parts = ["😂 Мем часа"]
-    if image_ru:
-        parts.append(f"🇷🇺 Перевод мема:\n{image_ru}")
-    elif title_ru:
-        parts.append(f"🇷🇺 Перевод:\n{title_ru}")
-    else:
-        parts.append(item["title"])
+    # Prefer the actual joke from the picture. Use the Reddit title only as fallback.
+    source_text = image_text if len(re.findall(r"[A-Za-z]{2,}", image_text)) >= 3 else item["title"]
+    translated = translate_to_russian(source_text)
 
-    if image_ru and title_ru:
-        parts.append(f"📝 Заголовок: {title_ru}")
+    if not translated:
+        translated = "Не удалось автоматически перевести текст этого мема."
 
-    parts.append(f"👍 {item['score']:,}  •  r/{item['subreddit']}".replace(",", " "))
-    parts.append(f"🔗 {item['permalink']}")
-
-    caption = "\n\n".join(parts)
+    caption = f"🇷🇺 Перевод:\n{translated}\n\n🔗 {item['permalink']}"
     if len(caption) > 1024:
-        caption = caption[:1021].rstrip() + "..."
+        link = f"\n\n🔗 {item['permalink']}"
+        allowed = max(100, 1024 - len(link) - len("🇷🇺 Перевод:\n") - 3)
+        translated = translated[:allowed].rstrip() + "..."
+        caption = f"🇷🇺 Перевод:\n{translated}{link}"
     return caption
 
 
 def send_to_telegram(
     token: str,
     chat_id: str,
-    item: dict,
     media: bytes,
     content_type: str,
     filename: str,
@@ -275,9 +335,9 @@ def main() -> int:
         return 1
 
     chat_ids = [chat_id, *EXTRA_CHAT_IDS]
-
     history = load_history()
     available = candidates(set(history))
+
     if not available:
         print("Не найдено подходящих свежих мемов.", file=sys.stderr)
         return 1
@@ -287,22 +347,20 @@ def main() -> int:
         try:
             media, content_type, filename = download_media(item["media_url"])
             caption = build_caption(item, media)
+
             for target_chat_id in chat_ids:
                 send_to_telegram(
                     token,
                     target_chat_id,
-                    item,
                     media,
                     content_type,
                     filename,
                     caption,
                 )
+
             history.append(item["id"])
             save_history(history)
-            print(
-                f"Отправлен мем r/{item['subreddit']} "
-                f"(ups={item['score']}, id={item['id']})."
-            )
+            print(f"Отправлен мем id={item['id']} в {len(chat_ids)} чата.")
             return 0
         except (requests.RequestException, RuntimeError, ValueError) as exc:
             last_error = exc
