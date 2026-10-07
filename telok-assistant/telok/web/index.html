@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Telok — редакция</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<aside class="sidebar">
+<a class="logo" href="/">telok<span>●</span></a><div class="logo-sub">ВАША AI-РЕДАКЦИЯ</div>
+<div class="project-switch"><span class="project-avatar">T</span><select id="project-select" aria-label="Выбрать проект"></select><button id="add-project" aria-label="Создать проект">+</button></div>
+<div class="nav-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
+<a href="/assistant" style="display:block;padding:14px;color:#244a36;font-weight:600">✦ AI-ассистент и подключения ↗</a><nav id="nav"><button data-tab="overview" class="active"><span>◈</span>Обзор</button><button data-tab="studio"><span>✦</span>Студия</button><button data-tab="plan"><span>▦</span>Контент-план</button><button data-tab="tasks"><span>≋</span>Задачи и расходы</button><button data-tab="brand"><span>◇</span>Бренд и источники</button><button data-tab="settings"><span>⚙</span>Настройки</button></nav>
+<div class="side-bottom"><div class="system-dot"></div><strong>Работа сохраняется</strong><p>PostgreSQL · DBOS</p><button id="pause-project" class="side-link">Поставить проект на паузу</button><div class="profile"><span>В</span><div><b>Владелец</b><small>Личное пространство</small></div></div></div>
+</aside>
+<main><header><div><span class="crumb">Рабочее пространство</span><span class="slash">/</span><strong id="breadcrumb">Обзор</strong></div><div class="header-right"><span class="connection" id="connection">Подключение…</span><button id="refresh" class="icon-button" aria-label="Обновить">↻</button></div></header>
+<div class="workspace">
+<section id="page-heading"><div><div class="eyebrow" id="eyebrow">ВСЁ НА СВОЁМ МЕСТЕ</div><h1 id="page-title">Редакция Telok</h1><p id="page-subtitle">От первой мысли до материала, которым хочется поделиться.</p></div><button class="primary" id="create-work">＋ Создать материал</button></section>
+<div id="notice"></div>
+<div id="content"><div class="loading"><span></span>Загружаем рабочее пространство</div></div>
+<footer>Создано с вниманием к деталям.<span>telok editorial workspace</span></footer>
+</div></main>
+<dialog id="modal"><form id="modal-form"><div class="modal-top"><div><div class="eyebrow" id="modal-eyebrow">TELOK STUDIO</div><h2 id="modal-title"></h2></div><button type="button" class="icon-button" id="close-modal" aria-label="Закрыть">×</button></div><div id="modal-body"></div><div id="modal-error" role="alert"></div><div class="modal-actions"><button type="button" class="secondary" id="cancel-modal">Отмена</button><button type="submit" class="primary" id="modal-submit">Сохранить</button></div></form></dialog>
+<div id="toast" role="status"></div><script src="/app.js"></script>
+</body></html>

@@ -1,0 +1,66 @@
+name: telok
+x-app: &app
+  image: telok-ai-team:0.1.0
+  build: .
+  env_file: .env.production
+  environment:
+    TELOK_ENV: production
+    TELOK_CREDENTIALS_DIR: /app/.secrets
+    TELOK_DATA_DIR: /app/data
+    TELOK_DATABASE_URL: postgresql+psycopg://telok:${TELOK_POSTGRES_PASSWORD:?Set TELOK_POSTGRES_PASSWORD}@postgres:5432/telok
+  volumes: ["appdata:/app/data", "credentials:/app/.secrets"]
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  depends_on:
+    postgres:
+      condition: service_healthy
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_USER: telok
+      POSTGRES_PASSWORD: ${TELOK_POSTGRES_PASSWORD:?Set TELOK_POSTGRES_PASSWORD}
+      POSTGRES_DB: telok
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telok -d telok"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    <<: *app
+    command: ["python","-m","alembic","upgrade","head"]
+    restart: "no"
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8481:8481"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8481/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    <<: *app
+    command: ["python","-m","telok.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  bot:
+    <<: *app
+    profiles: ["telegram"]
+    command: ["python","-m","telok.telegram"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+volumes:
+  pgdata:
+  appdata:
+  credentials:

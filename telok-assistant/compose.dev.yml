@@ -1,0 +1,21 @@
+name: telok-dev
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    container_name: telok-postgres
+    environment:
+      POSTGRES_USER: telok
+      POSTGRES_PASSWORD: telok-local-only
+      POSTGRES_DB: telok
+    ports: ["127.0.0.1:54391:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telok -d telok"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+volumes:
+  pgdata:
+    external: true
+    name: telok_pgdata
