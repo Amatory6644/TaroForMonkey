@@ -1,8 +1,6 @@
 import asyncio
 
 import httpx
-from aiogram import Bot
-from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from dbos import DBOS
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -38,7 +36,7 @@ def message(chat_id: int, value: str, markup: dict | None = None, reply_to: int 
     token = integrations.token()
     if not token:
         return
-    with httpx.Client(timeout=20, transport=httpx.HTTPTransport(retries=0)) as client:
+    with httpx.Client(timeout=20, trust_env=True) as client:
         response = client.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={
@@ -72,7 +70,7 @@ def notify_preview(chat_id: int, version_id: str):
     if assets:
         data, meta = storage.read(assets[0])
         method, field = ("sendVideo", "video") if meta["mime"] == "video/mp4" else ("sendPhoto", "photo")
-        with httpx.Client(timeout=30, transport=httpx.HTTPTransport(retries=0)) as client:
+        with httpx.Client(timeout=30, trust_env=True) as client:
             response = client.post(
                 f"https://api.telegram.org/bot{token}/{method}",
                 data={"chat_id": chat_id, "caption": body},
@@ -128,7 +126,7 @@ def handle_receipt(receipt_id: str):
         token = integrations.token()
         if token:
             try:
-                with httpx.Client(timeout=5, transport=httpx.HTTPTransport(retries=0)) as client:
+                with httpx.Client(timeout=5, trust_env=True) as client:
                     client.post(
                         f"https://api.telegram.org/bot{token}/answerCallbackQuery",
                         json={"callback_query_id": callback["id"]},
@@ -378,42 +376,62 @@ def handle_receipt(receipt_id: str):
 
 async def poll():
     if not integrations.token() or not integrations.allowed():
-        raise DomainError("Для бота нужны TELOK_TELEGRAM_TOKEN и allowed Telegram IDs.")
-    bot = Bot(integrations.token())
+        raise DomainError("Для бота нужны токен и личный Telegram user ID.")
     with transaction() as session:
         maximum = session.execute(
             select(Receipt.update_id).order_by(Receipt.update_id.desc()).limit(1)
         ).scalar_one_or_none()
     offset = (maximum + 1) if maximum is not None else None
-    try:
+    async with httpx.AsyncClient(timeout=35, trust_env=True) as client:
         while True:
             try:
-                updates = await bot.get_updates(
-                    offset=offset, timeout=20, allowed_updates=["message", "callback_query"]
-                )
-            except TelegramRetryAfter as exc:
-                await asyncio.sleep(min(max(exc.retry_after, 1), 60))
-                continue
-            except TelegramNetworkError:
+                value = await fetch_updates(client, offset)
+            except httpx.HTTPError:
                 await asyncio.sleep(3)
                 continue
-            for update in updates:
-                # Commit command and queue before confirming it via next long-poll offset.
-                payload = update.model_dump(mode="json", by_alias=True)
+            if not value.get("ok"):
+                code = value.get("error_code")
+                if code in {401, 403, 409}:
+                    raise DomainError(
+                        "Telegram polling остановлен: проверьте токен, webhook и второй обработчик. HTTP "
+                        + str(code)
+                    )
+                delay = value.get("parameters", {}).get("retry_after", 3)
+                await asyncio.sleep(min(max(delay, 1), 60))
+                continue
+            for payload in value.get("result", []):
+                # Persist queue before acknowledging an allowed update via next offset.
                 actor = (
                     (payload.get("message") or payload.get("callback_query") or {})
                     .get("from", {})
                     .get("id", 0)
                 )
                 if actor in integrations.allowed():
-                    ingest(update.update_id, payload)
-                offset = update.update_id + 1
-    finally:
-        await bot.session.close()
+                    ingest(payload["update_id"], payload)
+                offset = payload["update_id"] + 1
+
+
+async def fetch_updates(client, offset):
+    response = await client.post(
+        f"https://api.telegram.org/bot{integrations.token()}/getUpdates",
+        json={"offset": offset, "timeout": 20, "allowed_updates": ["message", "callback_query"]},
+    )
+    try:
+        return response.json()
+    except ValueError:
+        raise httpx.ReadError("Telegram returned an unreadable response") from None
 
 
 def main():
-    asyncio.run(poll())
+    from filelock import FileLock, Timeout
+
+    from telok.ai.credentials import root
+
+    try:
+        with FileLock(str(root() / "telegram-poller.lock"), timeout=0):
+            asyncio.run(poll())
+    except Timeout:
+        raise DomainError("Обработчик Telegram уже работает.") from None
 
 
 @DBOS.step(name="notify_result", retries_allowed=False)

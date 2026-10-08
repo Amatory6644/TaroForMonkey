@@ -46,6 +46,8 @@ def setup(request: Request):
             "configured": bool(integrations.token()),
             "username": tg.get("username", ""),
             "owner_id": tg.get("owner_id"),
+            "old_poller_stopped": tg.get("old_poller_stopped")
+            or credentials.read().get("legacy_poller_disabled", False),
         },
         "local": {
             "url": credentials.read().get("local_url", "http://127.0.0.1:8080/v1"),
@@ -57,9 +59,10 @@ def setup(request: Request):
 @routes.post("/api/assistant/telegram")
 def configure_telegram(request: Request, body: dict):
     local_only(request)
-    return integrations.configure(
+    result = integrations.configure(
         body.get("token", ""), body.get("owner_id", 0), body.get("old_poller_stopped") is True
     )
+    return {**result, **integrations.start_bot()}
 
 
 @routes.post("/api/assistant/chatgpt/connect")

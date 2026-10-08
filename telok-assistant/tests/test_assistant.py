@@ -306,3 +306,105 @@ def test_callback_error_is_safe_and_actionable():
     assert response.status_code == 200
     assert "AUTH_STATE" in response.text and "secret_code" not in response.text
     assert chatgpt_auth.status()["last_error"]["code"] == "AUTH_STATE"
+
+
+def test_telegram_config_uses_proxy_and_verified_poller_state(monkeypatch):
+    import httpx
+
+    from telok import integrations
+
+    credentials.update(legacy_poller_disabled=True)
+    captured = []
+    original = httpx.Client
+
+    def response(request):
+        result = {"username": "fixture_bot"} if request.url.path.endswith("getMe") else {"url": ""}
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    def client(**kwargs):
+        captured.append(kwargs.get("trust_env"))
+        return original(transport=httpx.MockTransport(response))
+
+    monkeypatch.setattr(integrations.httpx, "Client", client)
+    token = "1234567:" + "a" * 35
+    result = integrations.configure(token, 550658811, False)
+    assert result["configured"] and result["username"] == "fixture_bot"
+    assert captured == [True]
+    assert token not in json.dumps(result)
+    assert integrations.allowed() == [550658811]
+
+
+def test_telegram_webhook_failure_does_not_save_token(monkeypatch):
+    import httpx
+
+    from telok import integrations
+
+    original = httpx.Client
+
+    def response(request):
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"username": "fixture"}}
+            if request.url.path.endswith("getMe")
+            else {"ok": False},
+        )
+
+    monkeypatch.setattr(
+        integrations.httpx, "Client", lambda **kwargs: original(transport=httpx.MockTransport(response))
+    )
+    with pytest.raises(ValueError, match="webhook"):
+        integrations.configure("1234567:" + "a" * 35, 123, True)
+    assert not integrations.token()
+
+
+def test_telegram_api_starts_after_validated_save(monkeypatch):
+    from telok import integrations
+
+    calls = []
+    monkeypatch.setattr(integrations, "configure", lambda *args: {"configured": True, "username": "fixture"})
+    monkeypatch.setattr(integrations, "start_bot", lambda: calls.append("start") or {"running": True})
+    r = TestClient(app).post(
+        "/api/assistant/telegram",
+        json={"token": "fixture", "owner_id": 123},
+        headers={"X-Telok-Client": "dashboard"},
+    )
+    assert r.status_code == 200 and r.json()["running"] and calls == ["start"]
+
+
+def test_telegram_poll_persists_allowed_update_before_offset(monkeypatch):
+    import asyncio
+
+    from telok import integrations, telegram
+    from telok.domain import DomainError
+
+    monkeypatch.setattr(integrations, "token", lambda: "fixture")
+    monkeypatch.setattr(integrations, "allowed", lambda: [123])
+    committed = []
+    monkeypatch.setattr(telegram, "ingest", lambda update_id, payload: committed.append(update_id))
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(telegram.httpx, "AsyncClient", lambda **kwargs: Client())
+    calls = []
+
+    async def fetch(client, offset):
+        calls.append(offset)
+        if len(calls) > 1:
+            assert committed == [11] and offset == 12
+            raise DomainError("fixture stop")
+        return {
+            "ok": True,
+            "result": [
+                {"update_id": 10, "message": {"from": {"id": 999}}},
+                {"update_id": 11, "message": {"from": {"id": 123}}},
+            ],
+        }
+
+    monkeypatch.setattr(telegram, "fetch_updates", fetch)
+    with pytest.raises(DomainError, match="fixture stop"):
+        asyncio.run(telegram.poll())

@@ -24,17 +24,24 @@ def allowed():
 
 
 def configure(token_value, owner_id, old_poller_stopped=False):
-    if not re.fullmatch(r"[0-9]{5,15}:[A-Za-z0-9_-]{25,60}", token_value) or int(owner_id) <= 0:
+    token_value = str(token_value).strip()
+    try:
+        owner_id = int(owner_id)
+    except (ValueError, TypeError):
+        raise DomainError("В user ID нужны только цифры, без @username.") from None
+    if not re.fullmatch(r"[0-9]{5,15}:[A-Za-z0-9_-]{25,60}", token_value) or owner_id <= 0:
         raise DomainError("Проверьте токен и положительный личный Telegram user ID.")
-    if not old_poller_stopped:
+    if not old_poller_stopped and not credentials.read().get("legacy_poller_disabled"):
         raise DomainError("Сначала остановите старый обработчик getUpdates в TaroForMonkey.")
     try:
-        with httpx.Client(timeout=15, trust_env=False) as client:
+        with httpx.Client(timeout=15, trust_env=True) as client:
             response = client.get(f"https://api.telegram.org/bot{token_value}/getMe")
             value = response.json()
             hook = client.get(f"https://api.telegram.org/bot{token_value}/getWebhookInfo").json()
         if not value.get("ok"):
             raise DomainError("Telegram не принял токен.")
+        if not hook.get("ok"):
+            raise DomainError("Не удалось проверить webhook бота. Попробуйте ещё раз.")
         if hook.get("result", {}).get("url"):
             raise DomainError("У бота активен webhook. Сначала выполните явное переключение.")
     except httpx.HTTPError:
@@ -54,7 +61,7 @@ def send_document(chat_id, filename, data):
     if not token():
         return
     try:
-        with httpx.Client(timeout=30, trust_env=False) as client:
+        with httpx.Client(timeout=30, trust_env=True) as client:
             response = client.post(
                 f"https://api.telegram.org/bot{token()}/sendDocument",
                 data={"chat_id": chat_id},
@@ -69,7 +76,7 @@ def send_document(chat_id, filename, data):
 def download_file(file_id):
 
     try:
-        with httpx.Client(timeout=25, trust_env=False) as client:
+        with httpx.Client(timeout=25, trust_env=True) as client:
             value = client.get(
                 f"https://api.telegram.org/bot{token()}/getFile", params={"file_id": file_id}
             ).json()
@@ -106,7 +113,7 @@ def send_video(chat_id, data):
     if not token():
         return None
     try:
-        with httpx.Client(timeout=90, trust_env=False) as client:
+        with httpx.Client(timeout=90, trust_env=True) as client:
             response = client.post(
                 f"https://api.telegram.org/bot{token()}/sendVideo",
                 data={
@@ -121,3 +128,35 @@ def send_video(chat_id, data):
         return value["result"]["message_id"]
     except httpx.HTTPError:
         raise DomainError("Доставка видео не подтверждена. Автоматический повтор выключен.") from None
+
+
+def start_bot():
+    import os
+    import subprocess
+    from pathlib import Path
+
+    if not token():
+        raise DomainError("Сначала сохраните токен бота.")
+    if os.name != "nt" or settings().env != "development":
+        return {"running": None, "managed_externally": True}
+    root = Path(__file__).resolve().parents[1]
+    try:
+        subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(root / "scripts/start.ps1"),
+                "-Bot",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=True,
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.SubprocessError:
+        raise DomainError("Настройки сохранены, но бот не запустился. Нужна проверка запуска.") from None
+    return {"running": True}
