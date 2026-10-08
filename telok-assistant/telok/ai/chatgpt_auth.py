@@ -20,7 +20,7 @@ CALLBACK = "http://127.0.0.1:8481/auth/callback"
 
 def safe_request(method, url, **kwargs):
     try:
-        with httpx.Client(timeout=25, follow_redirects=False, trust_env=False) as client:
+        with httpx.Client(timeout=25, follow_redirects=False, trust_env=True) as client:
             response = client.request(method, url, **kwargs)
         if response.status_code != 200:
             code = ""
@@ -55,7 +55,7 @@ def start(new_profile=False):
         profile = data.get("profiles", {}).get(data.get("active_profile"), {}) if not new_profile else {}
         verifier, state, nonce = (secrets.token_urlsafe(48) for _ in range(3))
         client_id = profile.get("client_id", "dynamic_agent_client")
-        data["pending_oauth"] = {
+        pending = {
             "state": state,
             "nonce": nonce,
             "verifier": verifier,
@@ -63,6 +63,16 @@ def start(new_profile=False):
             "subject": profile.get("subject"),
             "expires": time.time() + 600,
         }
+        attempts = {
+            k: v for k, v in data.get("oauth_attempts", {}).items() if v.get("expires", 0) > time.time()
+        }
+        previous = data.get("pending_oauth", {})
+        if previous.get("expires", 0) > time.time():
+            attempts[previous["state"]] = previous
+        attempts[state] = pending
+        data["oauth_attempts"] = dict(list(attempts.items())[-5:])
+        data["pending_oauth"] = pending
+        data.pop("last_auth_error", None)
         credentials.write(data)
     params = dict(
         client_id=client_id,
@@ -112,13 +122,18 @@ def callback(params: dict):
     with credentials.locked():
         data = credentials.read()
         pending = data.get("pending_oauth", {})
+        returned_state = params.get("state", "")
+        if not pending or not hmac.compare_digest(pending.get("state", ""), returned_state):
+            pending = data.get("oauth_attempts", {}).get(returned_state, {})
         if (
             not pending
             or pending["expires"] < time.time()
             or not hmac.compare_digest(pending["state"], params.get("state", ""))
         ):
             raise ProviderError("AUTH_STATE", "Попытка входа истекла или не совпадает. Начните вход заново.")
-        data.pop("pending_oauth", None)
+        data.get("oauth_attempts", {}).pop(pending["state"], None)
+        if data.get("pending_oauth", {}).get("state") == pending["state"]:
+            data.pop("pending_oauth", None)
         credentials.write(data)
         if params.get("error"):
             raise ProviderError("CONSENT_DECLINED", "Вход отменён.")
@@ -161,6 +176,7 @@ def callback(params: dict):
         }
         data.setdefault("profiles", {})[client_id] = profile
         data["active_profile"] = client_id
+        data.pop("last_auth_error", None)
         credentials.write(data)
     return status()
 
@@ -171,6 +187,7 @@ def status():
         p = data.get("profiles", {}).get(data.get("active_profile"), {})
     scopes = p.get("scope", "").split()
     return {
+        "last_error": data.get("last_auth_error", {}),
         "connected": bool(p.get("access_token")),
         "sharing": "chatgpt.tokens.use.direct" in scopes,
         "verified": bool(p.get("verified")),
@@ -231,7 +248,7 @@ def disconnect():
                 discovery = safe_request("GET", AUTH + "/.well-known/openid-configuration")
                 endpoint = discovery.get("revocation_endpoint", "")
                 if endpoint.startswith(AUTH + "/"):
-                    with httpx.Client(timeout=15, trust_env=False) as client:
+                    with httpx.Client(timeout=15, trust_env=True) as client:
                         response = client.post(
                             endpoint,
                             data={
@@ -247,5 +264,6 @@ def disconnect():
             p.pop(key, None)
         p["verified"] = False
         data.pop("pending_oauth", None)
+        data.pop("oauth_attempts", None)
         credentials.write(data)
     return {"remote_revocation_confirmed": confirmed}

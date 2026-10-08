@@ -26,7 +26,7 @@ class ChatGPTPlanProvider:
     def models(self):
         token = chatgpt_auth.access_token(require_budget=False)
         try:
-            with httpx.Client(timeout=20, trust_env=False) as client:
+            with httpx.Client(timeout=20, trust_env=True) as client:
                 response = client.get(
                     "https://api.openai.com/v1/models", headers={"Authorization": "Bearer " + token}
                 )
@@ -54,7 +54,7 @@ class ChatGPTPlanProvider:
                 base_url="https://api.openai.com/v1",
                 max_retries=0,
                 timeout=60,
-                http_client=httpx.Client(trust_env=False),
+                http_client=httpx.Client(trust_env=True),
             ) as client:
                 options = {"tools": [{"type": "web_search"}]} if search else {}
                 with client.responses.create(

@@ -1,4 +1,6 @@
+import html
 import json
+import time
 
 from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -72,10 +74,16 @@ def callback(request: Request):
     try:
         chatgpt_auth.callback(dict(request.query_params))
         message = "Подключение сохранено. Вернитесь в Telok и проверьте модель."
-    except DomainError:
-        message = "Вход не завершён. Вернитесь в Telok и начните подключение заново."
+    except DomainError as exc:
+        code = getattr(exc, "code", "AUTH_FAILED")
+        credentials.update(last_auth_error={"code": code, "time": int(time.time())})
+        message = "Вход не завершён: " + str(exc) + " Код: " + code
+    except Exception:
+        credentials.update(last_auth_error={"code": "AUTH_FAILED", "time": int(time.time())})
+        message = "Вход не завершён из-за внутренней ошибки. Код: AUTH_FAILED."
+    message = html.escape(message)
     return HTMLResponse(
-        '<meta charset="utf-8"><meta name="referrer" content="no-referrer"><h2>'
+        '<meta charset="utf-8"><meta name="referrer" content="no-referrer"><script>history.replaceState(null,"","/auth/callback")</script><h2>'
         + message
         + '</h2><a href="/assistant">Вернуться в Telok</a>',
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},

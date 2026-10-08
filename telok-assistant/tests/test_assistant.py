@@ -249,3 +249,60 @@ def test_setup_contains_no_secrets_and_csrf():
 
 def test_precise_limit_code():
     assert mapped_error("subscription_sharing_usage_limit_exceeded", 429).code == "PLAN_LIMIT_REACHED"
+
+
+def test_multiple_signin_attempts_are_independent(monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    first = parse_qs(urlparse(chatgpt_auth.start()).query)
+    second = parse_qs(urlparse(chatgpt_auth.start()).query)
+    assert first["state"][0] in credentials.read()["oauth_attempts"]
+    assert second["state"][0] in credentials.read()["oauth_attempts"]
+    monkeypatch.setattr(
+        chatgpt_auth,
+        "safe_request",
+        lambda *a, **k: {
+            "access_token": "fake",
+            "refresh_token": "fake",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "id_token": "fake",
+            "scope": "chatgpt.tokens.use.direct",
+        },
+    )
+    monkeypatch.setattr(chatgpt_auth, "verify_identity", lambda *a, **k: {"sub": "fixture"})
+    chatgpt_auth.callback({"state": first["state"][0], "code": "fixture", "client_id": "oaiapp_fixture"})
+    assert chatgpt_auth.status()["connected"]
+    assert second["state"][0] in credentials.read()["oauth_attempts"]
+    with pytest.raises(ProviderError):
+        chatgpt_auth.callback({"state": first["state"][0], "code": "fixture", "client_id": "oaiapp_fixture"})
+
+
+def test_oauth_attempt_storage_is_bounded():
+    for _ in range(8):
+        chatgpt_auth.start()
+    assert len(credentials.read()["oauth_attempts"]) == 5
+
+
+def test_openai_auth_uses_system_proxy(monkeypatch):
+    captured = []
+    original = __import__("httpx").Client
+    transport = __import__("httpx").MockTransport(
+        lambda request: __import__("httpx").Response(200, json={"ok": True})
+    )
+
+    def client(**kwargs):
+        captured.append(kwargs["trust_env"])
+        return original(transport=transport)
+
+    monkeypatch.setattr(chatgpt_auth.httpx, "Client", client)
+    assert chatgpt_auth.safe_request("GET", chatgpt_auth.AUTH + "/.well-known/openid-configuration")["ok"]
+    assert captured == [True]
+
+
+def test_callback_error_is_safe_and_actionable():
+    client = TestClient(app)
+    response = client.get("/auth/callback?state=wrong&code=secret_code")
+    assert response.status_code == 200
+    assert "AUTH_STATE" in response.text and "secret_code" not in response.text
+    assert chatgpt_auth.status()["last_error"]["code"] == "AUTH_STATE"
