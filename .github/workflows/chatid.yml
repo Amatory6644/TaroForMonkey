@@ -34,7 +34,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
+      # Command polling moved to the local Telok assistant.
       - name: Process Telegram commands
+        if: ${{ false }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python src/chatid_bot.py
@@ -49,6 +51,7 @@ jobs:
           gh workflow run meme.yml --ref main
 
       - name: Save Telegram update offset
+        if: ${{ false }}
         shell: bash
         run: |
           if git diff --quiet -- data/telegram_update_state.json; then
