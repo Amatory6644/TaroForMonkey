@@ -138,7 +138,10 @@ def submit(request_id, actor, scene_id):
     if duration != int(duration) or not 4 <= duration <= 30:
         raise DomainError("Для этого адаптера нужны сцены длительностью 4–30 целых секунд.")
     content = [{"type": "text", "text": manifest["prompt"]}]
-    for ref in scene["reference_asset_ids"]:
+    frame = task["result"].get("local_frames", {}).get(scene_id)
+    use_frame = frame and frame.get("approved") and frame["scene_hash"] == manifest["content_hash"]
+    refs = [frame["asset_id"]] if use_frame else scene["reference_asset_ids"]
+    for ref in refs:
         data, meta = storage.read(ref, task["project_id"])
         if meta["mime"] not in {"image/png", "image/jpeg"}:
             raise DomainError("Seedance references должны быть изображениями.")
@@ -146,14 +149,14 @@ def submit(request_id, actor, scene_id):
             {
                 "type": "image_url",
                 "image_url": {"url": "data:" + meta["mime"] + ";base64," + base64.b64encode(data).decode()},
-                "role": "reference_image",
+                "role": "first_frame" if use_frame else "reference_image",
             }
         )
     body = {
         "model": cfg["model"],
         "content": content,
         "duration": int(duration),
-        "ratio": "9:16",
+        "ratio": "adaptive" if use_frame else "9:16",
         "resolution": "720p",
         "generate_audio": True,
     }

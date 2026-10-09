@@ -44,6 +44,20 @@ def failed(payload, error):
 @DBOS.workflow(name="telok_media", serialization_type="portable_json")
 def run(payload):
     try:
+        if payload["action"] == "local_all":
+            from telok.assistant import details
+
+            task = details(payload["request_id"], payload["actor"])
+            for scene in task["result"]["production"]["scenes"]:
+                local_studio_step({**payload, "action": "local_frame", "scene_id": scene["scene_id"]})
+            result = local_studio_step({**payload, "action": "storyboard"})
+            deliver_storyboard(payload)
+            return result
+        if payload["action"] in {"local_frame", "storyboard"}:
+            result = local_studio_step(payload)
+            if payload["action"] == "storyboard":
+                deliver_storyboard(payload)
+            return result
         if payload["action"] == "montage":
             return montage(payload)
         if payload["action"] == "qa":
@@ -102,3 +116,26 @@ def deliver_video(payload):
                         project_id=task["project_id"], request_id=task["id"], chat_id=chat_id, message_id=mid
                     )
                 )
+
+
+@DBOS.step(name="local_studio_v1", retries_allowed=False)
+def local_studio_step(payload):
+    from telok import local_studio
+
+    if payload["action"] == "storyboard":
+        return local_studio.storyboard(payload["request_id"], payload["actor"])
+    return local_studio.generate(
+        payload["request_id"], payload["actor"], payload["scene_id"], payload.get("seed", 0)
+    )
+
+
+@DBOS.step(name="local_storyboard_deliver_v1", retries_allowed=False)
+def deliver_storyboard(payload):
+    from telok import storage
+    from telok.assistant import details
+    from telok.integrations import send_video
+
+    task = details(payload["request_id"], payload["actor"])
+    if task["payload"].get("chat_id") and task["status"] != "CANCELLED":
+        data, _ = storage.read(task["result"]["storyboard_asset_id"], task["project_id"])
+        send_video(task["payload"]["chat_id"], data)

@@ -335,3 +335,88 @@ def task_video(request_id: str):
     return Response(
         data, media_type=meta["mime"], headers={"Content-Disposition": 'inline; filename="telok-video.mp4"'}
     )
+
+
+@routes.get("/api/assistant/local-studio")
+def local_studio_status():
+    from telok.local_studio import status
+
+    return status()
+
+
+@routes.post("/api/assistant/tasks/{request_id}/scenes/{scene_id}/local-frame")
+def local_frame(request_id: str, scene_id: str, body: dict):
+    from telok.domain import canonical, queue
+    from telok.media import pack_scene
+
+    actor = integrations.owner()
+    task, _, manifest = pack_scene(request_id, actor, scene_id)
+    seed = body.get("seed", 0)
+    if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed <= 2147483647:
+        raise DomainError("Seed должен быть целым числом от 0 до 2147483647.")
+    from telok.local_studio import check_task, status
+
+    check_task(task, actor)
+    if not status()["ready"]:
+        raise DomainError("Локальная модель ещё загружается или не установлена.")
+    workflow = "local-frame:" + canonical({"request": request_id, "scene": manifest, "seed": seed})
+    with transaction() as session:
+        queue(
+            session,
+            "telok_media",
+            workflow,
+            {
+                "request_id": request_id,
+                "scene_id": scene_id,
+                "actor": actor,
+                "action": "local_frame",
+                "seed": seed,
+            },
+        )
+    return {"status": "QUEUED"}
+
+
+@routes.post("/api/assistant/tasks/{request_id}/scenes/{scene_id}/frame-import")
+async def frame_import(request_id: str, scene_id: str, file: UploadFile):
+    from telok.local_studio import import_frame
+
+    return import_frame(request_id, integrations.owner(), scene_id, await file.read(10_000_001))
+
+
+@routes.post("/api/assistant/tasks/{request_id}/scenes/{scene_id}/frame-approve")
+def frame_approve(request_id: str, scene_id: str, body: dict):
+    from telok.local_studio import approve
+
+    return approve(request_id, integrations.owner(), scene_id, str(body.get("asset_id", "")))
+
+
+@routes.get("/api/assistant/tasks/{request_id}/scenes/{scene_id}/frame")
+def frame_view(request_id: str, scene_id: str):
+    from telok import storage
+    from telok.media import pack_scene
+
+    task, _, manifest = pack_scene(request_id, integrations.owner(), scene_id)
+    frame = task["result"].get("local_frames", {}).get(scene_id)
+    if not frame or frame["scene_hash"] != manifest["content_hash"]:
+        raise DomainError("Кадр отсутствует или устарел.")
+    data, meta = storage.read(frame["asset_id"], task["project_id"])
+    return Response(data, media_type=meta["mime"])
+
+
+@routes.post("/api/assistant/tasks/{request_id}/storyboard")
+def storyboard_queue(request_id: str):
+    return enqueue_media(request_id, "storyboard")
+
+
+@routes.get("/api/assistant/tasks/{request_id}/storyboard")
+def storyboard_view(request_id: str):
+    from telok import storage
+
+    task = assistant.details(request_id, integrations.owner())
+    asset = task["result"].get("storyboard_asset_id")
+    from telok.domain import canonical
+
+    if not asset or task["result"].get("storyboard_pack_hash") != canonical(task["result"].get("production")):
+        raise DomainError("Раскадровка ещё не собрана или устарела.")
+    data, meta = storage.read(asset, task["project_id"])
+    return Response(data, media_type=meta["mime"])

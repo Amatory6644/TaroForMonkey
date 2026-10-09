@@ -1,4 +1,4 @@
-param([switch]$Bot)
+param([switch]$Bot, [switch]$LocalStudio)
 $ErrorActionPreference = "Stop"
 $telokRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $telokRoot
@@ -42,3 +42,5 @@ foreach ($telokEntry in $telokProcesses) {
     if ($telokProcess.HasExited) { throw "$telokName exited. See logs/$telokName.err.log" }
 }
 Write-Host 'Telok: http://127.0.0.1:8481'
+
+if ($LocalStudio) { & (Join-Path $PSScriptRoot "start-local-studio.ps1") }

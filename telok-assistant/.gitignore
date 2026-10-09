@@ -13,3 +13,5 @@ artifacts/
 .env.production
 
 .secrets/
+
+.venv-local/

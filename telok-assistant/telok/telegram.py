@@ -154,6 +154,54 @@ def handle_receipt(receipt_id: str):
     if msg.get("chat", {}).get("type") != "private":
         return {"status": "IGNORED"}
     try:
+        if command.split(maxsplit=1)[0:1] in [["/frames"], ["/storyboard"]]:
+            from telok import assistant, local_studio
+            from telok.domain import canonical
+            from telok.models import TaskMessage
+
+            parts = command.split()
+            request_id = parts[1] if len(parts) > 1 else None
+            if not request_id:
+                with transaction() as session:
+                    linked = session.execute(
+                        select(TaskMessage).where(
+                            TaskMessage.chat_id == chat_id,
+                            TaskMessage.message_id == msg.get("reply_to_message", {}).get("message_id", -1),
+                        )
+                    ).scalar_one_or_none()
+                    request_id = linked.request_id if linked else None
+            if not request_id:
+                raise DomainError(
+                    "Ответьте на результат задачи командой /frames или /storyboard, либо укажите ID задачи."
+                )
+            task = assistant.details(request_id, actor)
+            local_studio.check_task(task, actor)
+            if not task["result"].get("production"):
+                raise DomainError("Сначала дождитесь готового сценария.")
+            action = "local_all" if parts[0] == "/frames" else "storyboard"
+            if action == "local_all" and not local_studio.status()["ready"]:
+                raise DomainError("Локальный ComfyUI ещё не запущен.")
+            with transaction() as session:
+                queue(
+                    session,
+                    "telok_media",
+                    "local-tg:"
+                    + canonical(
+                        {
+                            "request": request_id,
+                            "action": action,
+                            "pack": task["result"]["production"],
+                            "update": receipt.update_id,
+                        }
+                    ),
+                    {"request_id": request_id, "actor": actor, "action": action},
+                )
+            message(
+                chat_id,
+                "Локальная раскадровка принята. Кадры и MP4 создаются на компьютере. "
+                "Если нужны английские промпты, используется выбранная текстовая модель. Заказов Seedance нет.",
+            )
+            return {"status": "QUEUED", "request_id": request_id}
         with transaction() as session:
             editing_context = session.execute(
                 select(Context).where(Context.actor_id == actor)
@@ -238,7 +286,7 @@ def handle_receipt(receipt_id: str):
         if command in {"/start", "/help"}:
             message(
                 chat_id,
-                "Telok • AI-команда\nПришлите задачу обычным сообщением.\n/content задача — контент-пакет\n/research тема — исследование\n/cancel ID — отмена\n/projects — проекты\n/use ID — выбрать\n/ideas 5 тема\n/plan 2026-10-05\n/produce задача\n/status\n/approve VERSION_ID\n/edit VERSION_ID text правка\n/pause • /resume",
+                "Telok • AI-команда\nПришлите задачу обычным сообщением.\n/content задача — контент-пакет\n/research тема — исследование\n/frames — локальные кадры и раскадровка (ответом на результат)\n/storyboard — собрать раскадровку из готовых кадров\n/cancel ID — отмена\n/projects — проекты\n/use ID — выбрать\n/ideas 5 тема\n/plan 2026-10-05\n/produce задача\n/status\n/approve VERSION_ID\n/edit VERSION_ID text правка\n/pause • /resume",
             )
             return {"status": "OK"}
         with transaction() as session:
