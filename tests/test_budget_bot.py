@@ -1,8 +1,11 @@
 """Offline tests; no actual Telegram or G-pals requests."""
 
+import io
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 from src.budget_bot import (
     BudgetBot,
@@ -10,6 +13,7 @@ from src.budget_bot import (
     chunks,
     command_period,
     pair_chat,
+    request_json,
     validate_local_url,
 )
 
@@ -44,6 +48,39 @@ def message(text="/budget", chat_id=123, kind="private", update_id=1):
 
 
 class BudgetTests(unittest.TestCase):
+    def test_proxy_applies_only_to_telegram(self):
+        proxies = []
+
+        class Opener:
+            def open(self, request, timeout):
+                return io.BytesIO(b'{"ok":true}')
+
+        def build(*handlers):
+            proxies.append(handlers[0].proxies)
+            return Opener()
+
+        with (
+            mock.patch(
+                "urllib.request.getproxies",
+                return_value={"https": "http://127.0.0.1:9999"},
+            ),
+            mock.patch("urllib.request.build_opener", side_effect=build),
+        ):
+            request_json("https://api.telegram.org/bot123:TEST/getMe", {})
+            request_json("http://127.0.0.1:8000/api/session", {})
+        self.assertEqual(proxies, [{"https": "http://127.0.0.1:9999"}, {}])
+
+    def test_network_error_identifies_service_without_token(self):
+        opener = mock.Mock()
+        opener.open.side_effect = urllib.error.URLError(TimeoutError())
+        with (
+            mock.patch("urllib.request.build_opener", return_value=opener),
+            self.assertRaises(IntegrationError) as caught,
+        ):
+            request_json("https://api.telegram.org/bot123:SECRET/getMe", {})
+        self.assertIn("Telegram", str(caught.exception))
+        self.assertNotIn("SECRET", str(caught.exception))
+
     def test_commands(self):
         for command, expected in [
             ("/budget", "current"),

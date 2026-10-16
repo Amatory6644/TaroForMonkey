@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import ssl
 import sys
 import time
 import urllib.error
@@ -33,7 +34,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def request_json(url, payload, timeout=30, headers=None):
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    telegram = url.startswith("https://api.telegram.org/")
+    # Telegram may require the user's Windows/system proxy. Loopback must bypass it.
+    proxy = urllib.request.ProxyHandler() if telegram else urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(proxy, NoRedirect())
+    service = "Telegram" if telegram else "G-pals"
     request = urllib.request.Request(
         url,
         json.dumps(payload).encode("utf-8") if payload is not None else None,
@@ -43,18 +48,29 @@ def request_json(url, payload, timeout=30, headers=None):
         with opener.open(request, timeout=timeout) as response:
             return json.loads(response.read(2_000_000))
     except urllib.error.HTTPError as exc:
-        if exc.code == 409 and url.startswith("https://api.telegram.org/"):
+        if exc.code == 409 and telegram:
             raise StopPolling(
                 "Другой процесс уже получает команды бота. Остановите его перед запуском отчётов."
             ) from None
         if exc.code == 401:
-            if url.startswith("https://api.telegram.org/"):
+            if telegram:
                 raise StopPolling("Авторизация отклонена. Проверьте локальную настройку токена.") from None
             raise SessionExpired("Сессия G-pals истекла.") from None
-        raise IntegrationError("Сервис отклонил запрос. Проверьте настройки и повторите команду.") from None
-    except (OSError, ValueError):
+        raise IntegrationError(f"{service} отклонил запрос (HTTP {exc.code}). Проверьте настройки.") from None
+    except ValueError:
+        raise IntegrationError(f"{service} вернул некорректный JSON-ответ.") from None
+    except OSError as exc:
         # Never include the exception/URL: Telegram's URL contains the bot token.
-        raise IntegrationError("Сервис недоступен. Проверьте интернет и запуск G-pals.") from None
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            message = (
+                f"{service}: ошибка проверки сертификата HTTPS. Проверьте системный прокси и сертификаты."
+            )
+        elif telegram:
+            message = "Telegram недоступен по сети. Проверьте интернет и системный прокси Windows. G-pals может продолжать работать локально."
+        else:
+            message = "Локальный G-pals недоступен. Запустите G-pals и проверьте GPALS_URL."
+        raise IntegrationError(message) from None
 
 
 def validate_local_url(value):
