@@ -36,7 +36,7 @@ jobs:
               opener = urllib.request.build_opener(NoRedirect())
               def call(path, body):
                   request = urllib.request.Request(origin+path,json.dumps(body).encode(),
-                      {'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+                      {'Authorization':'Bearer '+token,'Content-Type':'application/json','User-Agent':'G-pals-wake/1.0','Accept':'application/json'})
                   with opener.open(request,timeout=15) as response: return json.loads(response.read(4096))
               command = call('/wake/claim',{}).get('command')
               if not command:
@@ -48,6 +48,6 @@ jobs:
                           time.sleep(1)
                   call('/wake/ack',{'lease':command['lease']})
                   print('Wake packet sent. Computer readiness is checked separately by G-pals.')
-          except Exception:
-              print('Wake failed. Check private configuration and external UDP route.')
+          except Exception as error:
+              print('Wake failed:',type(error).__name__,'HTTP',getattr(error,'code','-'))
               raise SystemExit(1) from None
