@@ -1,0 +1,53 @@
+name: G-pals wake home computer
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: gpals-home-wake
+  cancel-in-progress: false
+jobs:
+  wake:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Claim pending wake and send Magic Packet
+        env:
+          GPALS_URL: ${{ secrets.GPALS_WORKER_URL }}
+          GPALS_RELAY_TOKEN: ${{ secrets.GPALS_WAKE_RELAY_TOKEN }}
+          GPALS_WOL_HOST: ${{ secrets.GPALS_WOL_HOST }}
+          GPALS_WOL_MAC: ${{ secrets.GPALS_WOL_MAC }}
+        shell: python
+        run: |
+          import os, json, re, socket, time, urllib.request
+          from urllib.parse import urlsplit
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs): return None
+          try:
+              origin = os.environ['GPALS_URL'].rstrip('/')
+              url = urlsplit(origin)
+              assert url.scheme == 'https' and url.hostname and not (url.username or url.password or url.path or url.query or url.fragment)
+              token = os.environ['GPALS_RELAY_TOKEN']
+              assert len(token) >= 32
+              mac = os.environ['GPALS_WOL_MAC']
+              assert re.fullmatch(r'(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}', mac)
+              host = os.environ['GPALS_WOL_HOST']
+              address = socket.gethostbyname(host)
+              packet = b'\xff'*6 + bytes.fromhex(mac.replace(':','').replace('-',''))*16
+              opener = urllib.request.build_opener(NoRedirect())
+              def call(path, body):
+                  request = urllib.request.Request(origin+path,json.dumps(body).encode(),
+                      {'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+                  with opener.open(request,timeout=15) as response: return json.loads(response.read(4096))
+              command = call('/wake/claim',{}).get('command')
+              if not command:
+                  print('No pending wake request; no packet sent.')
+              elif command.get('action') == 'wake' and time.time()*1000 < command['expires_at']:
+                  with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sender:
+                      for _ in range(3):
+                          sender.sendto(packet,(address,9))
+                          time.sleep(1)
+                  call('/wake/ack',{'lease':command['lease']})
+                  print('Wake packet sent. Computer readiness is checked separately by G-pals.')
+          except Exception:
+              print('Wake failed. Check private configuration and external UDP route.')
+              raise SystemExit(1) from None
